@@ -1,0 +1,502 @@
+const body = document.body;
+const menuToggle = document.querySelector(".menu-toggle");
+const siteNav = document.querySelector(".site-nav");
+const navLinks = document.querySelectorAll('.site-nav a[href^="#"]');
+const form = document.getElementById("quote-form");
+const formStatus = document.getElementById("form-status");
+const reveals = document.querySelectorAll(".reveal");
+const materialTabs = document.querySelectorAll(".material-tab");
+const materialPanels = document.querySelectorAll(".material-panel");
+const fileInput = document.getElementById("attachment");
+const fileDropzone = document.getElementById("file-dropzone");
+const fileMeta = document.getElementById("file-meta");
+const fileName = document.getElementById("file-name");
+const fileSize = document.getElementById("file-size");
+const fileRemove = document.getElementById("file-remove");
+const fileError = document.getElementById("file-error");
+const fileHint = document.getElementById("file-hint");
+const submitButton = document.getElementById("submit-button");
+const fileProgress = document.getElementById("file-progress");
+const fileProgressBar = document.getElementById("file-progress-bar");
+const currentYearNode = document.getElementById("current-year");
+const footerContactsNode = document.getElementById("footer-contacts");
+const mobileStickyCta = document.querySelector(".mobile-sticky-cta");
+const quoteSection = document.getElementById("quote");
+
+const allowedFileExtensions = [".stl", ".3mf", ".step", ".stp", ".obj", ".zip"];
+const defaultMaxFileSizeMb = 50;
+let isSubmitting = false;
+let uploadProgressTimer = null;
+const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+const siteConfig = {
+  contacts: {
+    email: "email@placeholder.example",
+    phone: "+00 (000) 000-00-00",
+    socialLinks: [
+      { label: "Instagram", href: "#" },
+      { label: "Facebook", href: "#" },
+    ],
+  },
+};
+
+async function syncUploadSettings() {
+  if (!form) {
+    return;
+  }
+
+  try {
+    const response = await fetch("/health");
+    if (!response.ok) {
+      return;
+    }
+
+    const result = await response.json();
+    const maxFileSizeMb = Number(result.maxFileSizeMb);
+
+    if (Number.isFinite(maxFileSizeMb) && maxFileSizeMb > 0) {
+      form.dataset.maxFileSizeMb = String(maxFileSizeMb);
+      if (fileHint) {
+        fileHint.textContent = `Підтримуються STL, 3MF, STEP, STP, OBJ, ZIP. Максимальний розмір: ${maxFileSizeMb} МБ.`;
+      }
+    }
+  } catch (_error) {
+    // If health settings are unavailable, the UI falls back to its default limit.
+  }
+}
+
+function closeMenu() {
+  if (!menuToggle || !siteNav) {
+    return;
+  }
+
+  menuToggle.setAttribute("aria-expanded", "false");
+  menuToggle.setAttribute("aria-label", "Відкрити меню");
+  siteNav.classList.remove("is-open");
+  body.classList.remove("menu-open");
+}
+
+function openMenu() {
+  if (!menuToggle || !siteNav) {
+    return;
+  }
+
+  menuToggle.setAttribute("aria-expanded", "true");
+  menuToggle.setAttribute("aria-label", "Закрити меню");
+  siteNav.classList.add("is-open");
+  body.classList.add("menu-open");
+}
+
+if (menuToggle && siteNav) {
+  menuToggle.addEventListener("click", () => {
+    const isOpen = siteNav.classList.contains("is-open");
+    if (isOpen) {
+      closeMenu();
+      return;
+    }
+    openMenu();
+  });
+
+  navLinks.forEach((link) => {
+    link.addEventListener("click", closeMenu);
+  });
+
+  window.addEventListener("resize", () => {
+    if (window.innerWidth > 820) {
+      closeMenu();
+    }
+  });
+}
+
+document.querySelectorAll('a[href^="#"]').forEach((link) => {
+  link.addEventListener("click", (event) => {
+    const href = link.getAttribute("href");
+    if (!href || href === "#") {
+      return;
+    }
+
+    const target = document.querySelector(href);
+    if (!target) {
+      return;
+    }
+
+    event.preventDefault();
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+});
+
+const revealObserver = new IntersectionObserver(
+  (entries) => {
+    entries.forEach((entry) => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add("is-visible");
+        revealObserver.unobserve(entry.target);
+      }
+    });
+  },
+  { threshold: 0.18 }
+);
+
+if (!prefersReducedMotion) {
+  reveals.forEach((item) => revealObserver.observe(item));
+} else {
+  reveals.forEach((item) => item.classList.add("is-visible"));
+}
+
+if (materialTabs.length && materialPanels.length) {
+  materialTabs.forEach((tab) => {
+    tab.addEventListener("click", () => {
+      const material = tab.dataset.material;
+
+      materialTabs.forEach((item) => {
+        item.classList.toggle("is-active", item === tab);
+        item.setAttribute("aria-selected", String(item === tab));
+      });
+
+      materialPanels.forEach((panel) => {
+        panel.classList.toggle("is-active", panel.dataset.panel === material);
+      });
+    });
+  });
+}
+
+function formatFileSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 Б";
+  }
+
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(2)} МБ`;
+  }
+
+  return `${Math.round(bytes / 1024)} КБ`;
+}
+
+function setFieldError(field, message) {
+  if (!field) {
+    return;
+  }
+
+  const wrapper = field.closest("label") || field.closest(".file-upload-field");
+  const errorNode = wrapper?.querySelector(".field-error") || (field === fileInput ? fileError : null);
+
+  if (wrapper) {
+    wrapper.classList.toggle("field-has-error", Boolean(message));
+  }
+
+  if (field === fileInput && fileDropzone) {
+    fileDropzone.classList.toggle("has-error", Boolean(message));
+  }
+
+  if (errorNode) {
+    errorNode.textContent = message || "";
+  }
+}
+
+function clearFormErrors() {
+  form?.querySelectorAll(".field-has-error").forEach((item) => item.classList.remove("field-has-error"));
+  form?.querySelectorAll(".field-error").forEach((item) => {
+    item.textContent = "";
+  });
+  fileDropzone?.classList.remove("has-error");
+}
+
+function getSelectedFile() {
+  return fileInput?.files?.[0] || null;
+}
+
+function syncFileUi() {
+  const file = getSelectedFile();
+  if (!fileMeta || !fileName || !fileSize) {
+    return;
+  }
+
+  if (!file) {
+    fileMeta.hidden = true;
+    fileName.textContent = "Файл не вибрано";
+    fileSize.textContent = "";
+    if (fileProgress) {
+      fileProgress.hidden = true;
+      fileProgressBar.style.width = "0%";
+    }
+    return;
+  }
+
+  fileMeta.hidden = false;
+  fileName.textContent = file.name;
+  fileSize.textContent = formatFileSize(file.size);
+}
+
+function animateFileProgress() {
+  if (!fileProgress || !fileProgressBar) {
+    return;
+  }
+
+  fileProgress.hidden = false;
+  fileProgressBar.style.width = "0%";
+
+  if (prefersReducedMotion) {
+    fileProgressBar.style.width = "100%";
+    return;
+  }
+
+  clearInterval(uploadProgressTimer);
+  let progress = 0;
+  uploadProgressTimer = window.setInterval(() => {
+    progress = Math.min(progress + 12, 100);
+    fileProgressBar.style.width = `${progress}%`;
+    if (progress >= 100) {
+      clearInterval(uploadProgressTimer);
+    }
+  }, 40);
+}
+
+function validateFile() {
+  const file = getSelectedFile();
+  if (!file) {
+    setFieldError(fileInput, "Додайте файл моделі або архів із моделлю.");
+    return false;
+  }
+
+  const extension = `.${file.name.split(".").pop()?.toLowerCase() || ""}`;
+  if (!allowedFileExtensions.includes(extension)) {
+    setFieldError(fileInput, "Допустимі лише файли STL, 3MF, STEP, STP, OBJ або ZIP.");
+    return false;
+  }
+
+  const maxSizeMb = Number(form?.dataset.maxFileSizeMb || defaultMaxFileSizeMb);
+  if (file.size > maxSizeMb * 1024 * 1024) {
+    setFieldError(fileInput, `Файл перевищує дозволений розмір ${maxSizeMb} МБ.`);
+    return false;
+  }
+
+  setFieldError(fileInput, "");
+  return true;
+}
+
+function validateEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function validatePhone(value) {
+  return /^\+?[0-9\s()\-]{9,20}$/.test(value.trim());
+}
+
+function validateForm() {
+  if (!form) {
+    return false;
+  }
+
+  clearFormErrors();
+
+  let isValid = true;
+  const nameField = form.elements.namedItem("fullName");
+  const phoneField = form.elements.namedItem("phone");
+  const emailField = form.elements.namedItem("email");
+  const messageField = form.elements.namedItem("comment");
+  const quantityField = form.elements.namedItem("quantity");
+  const consentField = form.elements.namedItem("privacyAccepted");
+
+  if (!validateFile()) {
+    isValid = false;
+  }
+
+  if (!(nameField instanceof HTMLInputElement) || !nameField.value.trim()) {
+    setFieldError(nameField, "Вкажіть ім'я та прізвище.");
+    isValid = false;
+  }
+
+  if (!(phoneField instanceof HTMLInputElement) || !phoneField.value.trim()) {
+    setFieldError(phoneField, "Вкажіть номер телефону.");
+    isValid = false;
+  } else if (!validatePhone(phoneField.value)) {
+    setFieldError(phoneField, "Вкажіть коректний телефон у міжнародному або українському форматі.");
+    isValid = false;
+  }
+
+  if (!(emailField instanceof HTMLInputElement) || !emailField.value.trim()) {
+    setFieldError(emailField, "Вкажіть електронну пошту.");
+    isValid = false;
+  } else if (!validateEmail(emailField.value.trim())) {
+    setFieldError(emailField, "Вкажіть коректну електронну пошту.");
+    isValid = false;
+  }
+
+  if (!(messageField instanceof HTMLTextAreaElement) || !messageField.value.trim()) {
+    setFieldError(messageField, "Опишіть вимоги до замовлення.");
+    isValid = false;
+  }
+
+  if (quantityField instanceof HTMLInputElement && quantityField.value && Number(quantityField.value) < 1) {
+    setFieldError(quantityField, "Кількість деталей має бути більшою за нуль.");
+    isValid = false;
+  }
+
+  if (consentField instanceof RadioNodeList ? !consentField.value : consentField instanceof HTMLInputElement && !consentField.checked) {
+    const consentError = document.getElementById("consent-error");
+    if (consentError) {
+      consentError.textContent = "Потрібна згода з обробкою персональних даних.";
+    }
+    isValid = false;
+  }
+
+  return isValid;
+}
+
+if (fileInput && fileDropzone && fileRemove) {
+  fileInput.addEventListener("change", () => {
+    syncFileUi();
+    animateFileProgress();
+    validateFile();
+  });
+
+  ["dragenter", "dragover"].forEach((eventName) => {
+    fileDropzone.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      fileDropzone.classList.add("is-dragover");
+    });
+  });
+
+  ["dragleave", "dragend", "drop"].forEach((eventName) => {
+    fileDropzone.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      fileDropzone.classList.remove("is-dragover");
+    });
+  });
+
+  fileDropzone.addEventListener("drop", (event) => {
+    const droppedFiles = event.dataTransfer?.files;
+    if (!droppedFiles?.length) {
+      return;
+    }
+
+    fileInput.files = droppedFiles;
+    syncFileUi();
+    animateFileProgress();
+    validateFile();
+  });
+
+  fileDropzone.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      fileInput.click();
+    }
+  });
+
+  fileRemove.addEventListener("click", () => {
+    fileInput.value = "";
+    syncFileUi();
+    if (fileProgressBar) {
+      fileProgressBar.style.width = "0%";
+    }
+    setFieldError(fileInput, "");
+  });
+}
+
+if (currentYearNode) {
+  currentYearNode.textContent = String(new Date().getFullYear());
+}
+
+if (footerContactsNode) {
+  const { email, phone, socialLinks } = siteConfig.contacts;
+  footerContactsNode.innerHTML = `
+    <strong>Контакти</strong>
+    <a class="footer-contact-link" href="mailto:${email}">${email}</a>
+    <a class="footer-contact-link" href="tel:${phone.replace(/[^+\d]/g, "")}">${phone}</a>
+    <div class="footer-socials">
+      <strong>Соціальні мережі</strong>
+      ${socialLinks.map((link) => `<a href="${link.href}" target="_blank" rel="noopener noreferrer">${link.label}</a>`).join("")}
+    </div>
+  `;
+}
+
+if (mobileStickyCta && quoteSection && !prefersReducedMotion) {
+  const stickyCtaObserver = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        mobileStickyCta.style.opacity = entry.isIntersecting ? "0" : "1";
+        mobileStickyCta.style.pointerEvents = entry.isIntersecting ? "none" : "auto";
+      });
+    },
+    { threshold: 0.2 }
+  );
+
+  stickyCtaObserver.observe(quoteSection);
+}
+
+if (!prefersReducedMotion) {
+  window.addEventListener("scroll", () => {
+    const offset = Math.min(window.scrollY * 0.08, 26);
+    document.documentElement.style.setProperty("--grid-shift", `${offset}px`);
+  }, { passive: true });
+}
+
+if (form && formStatus) {
+  syncUploadSettings();
+
+  form.querySelectorAll("input, textarea, select").forEach((field) => {
+    field.addEventListener("input", () => {
+      const wrapper = field.closest("label");
+      wrapper?.classList.remove("field-has-error");
+      const errorNode = wrapper?.querySelector(".field-error");
+      if (errorNode) {
+        errorNode.textContent = "";
+      }
+      if (field instanceof HTMLInputElement && field.type === "checkbox") {
+        const consentError = document.getElementById("consent-error");
+        if (consentError) {
+          consentError.textContent = "";
+        }
+      }
+    });
+  });
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (isSubmitting) {
+      return;
+    }
+
+    formStatus.className = "form-status full-width";
+
+    if (!validateForm()) {
+      formStatus.classList.add("is-error");
+      formStatus.textContent = "Перевірте форму та виправте поля з помилками.";
+      return;
+    }
+
+    isSubmitting = true;
+    if (submitButton) {
+      submitButton.disabled = true;
+    }
+    formStatus.textContent = "Надсилаємо заявку...";
+
+    try {
+      const response = await fetch("/api/leads", {
+        method: "POST",
+        body: new FormData(form),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.message || "Не вдалося надіслати заявку.");
+      }
+
+      form.reset();
+      syncFileUi();
+      clearFormErrors();
+      formStatus.classList.add("is-success");
+      formStatus.textContent =
+        result.message || "Дякуємо! Ми отримали вашу модель та зв'яжемося з вами після її аналізу.";
+    } catch (error) {
+      formStatus.classList.add("is-error");
+      formStatus.textContent = error.message || "Сталася помилка. Спробуйте ще раз.";
+    } finally {
+      isSubmitting = false;
+      if (submitButton) {
+        submitButton.disabled = false;
+      }
+    }
+  });
+}
